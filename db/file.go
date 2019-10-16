@@ -30,6 +30,7 @@ func OnFileUploadFinished(filehash string, filename string, filesize int64, file
 	return false
 }
 
+// TableFile : 文件表结构体
 type TableFile struct {
 	FileHash string
 	FileName sql.NullString
@@ -37,10 +38,11 @@ type TableFile struct {
 	FileAddr sql.NullString
 }
 
-//GetFileMeta:从mysql获取文件元信息
+// GetFileMeta : 从mysql获取文件元信息
 func GetFileMeta(filehash string) (*TableFile, error) {
-	stmt, err := mydb.DBConn().Prepare("select file_hash,file_addr,file_name,file_size " +
-		"from tbl_file where file_hash=? and status=1 limit 1")
+	stmt, err := mydb.DBConn().Prepare(
+		"select file_hash,file_addr,file_name,file_size from tbl_file " +
+			"where file_hash=? and status=1 limit 1")
 	if err != nil {
 		fmt.Println(err.Error())
 		return nil, err
@@ -48,10 +50,50 @@ func GetFileMeta(filehash string) (*TableFile, error) {
 	defer stmt.Close()
 
 	tfile := TableFile{}
-	err = stmt.QueryRow(filehash).Scan(&tfile.FileHash, &tfile.FileAddr, &tfile.FileName, &tfile.FileSize)
+	err = stmt.QueryRow(filehash).Scan(
+		&tfile.FileHash, &tfile.FileAddr, &tfile.FileName, &tfile.FileSize)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			// 查不到对应记录， 返回参数及错误均为nil
+			return nil, nil
+		} else {
+			fmt.Println(err.Error())
+			return nil, err
+		}
+	}
+	return &tfile, nil
+}
+
+// GetFileMetaList : 从mysql批量获取文件元信息
+func GetFileMetaList(limit int) ([]TableFile, error) {
+	stmt, err := mydb.DBConn().Prepare(
+		"select file_hash,file_addr,file_name,file_size from tbl_file " +
+			"where status=1 limit ?")
 	if err != nil {
 		fmt.Println(err.Error())
 		return nil, err
 	}
-	return &tfile, nil
+	defer stmt.Close()
+
+	rows, err := stmt.Query(limit)
+	if err != nil {
+		fmt.Println(err.Error())
+		return nil, err
+	}
+
+	cloumns, _ := rows.Columns()
+	values := make([]sql.RawBytes, len(cloumns))
+	var tfiles []TableFile
+	for i := 0; i < len(values) && rows.Next(); i++ {
+		tfile := TableFile{}
+		err = rows.Scan(&tfile.FileHash, &tfile.FileAddr,
+			&tfile.FileName, &tfile.FileSize)
+		if err != nil {
+			fmt.Println(err.Error())
+			break
+		}
+		tfiles = append(tfiles, tfile)
+	}
+	fmt.Println(len(tfiles))
+	return tfiles, nil
 }
