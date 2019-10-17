@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	dblayer "filestore-server/db"
 	"filestore-server/meta"
+	"filestore-server/store/ceph"
 	"filestore-server/util"
 	"fmt"
+	"gopkg.in/amz.v1/s3"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -53,8 +55,16 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		// 游标重新回到文件头部
 		newFile.Seek(0, 0)
-
 		fileMeta.FileSha1 = util.FileSha1(newFile)
+
+		//同时将文件写入ceph存储
+		newFile.Seek(0, 0)
+		data, _ := ioutil.ReadAll(newFile)
+		bucket := ceph.GetCephBucket("userfile")
+		cephPath := "/ceph/" + fileMeta.FileSha1
+		_ = bucket.Put(cephPath, data, "octet-stream", s3.PublicRead)
+		fileMeta.Location = cephPath
+
 		//meta.UpdateFileMeta(fileMeta)
 		//更新文件表记录到数据库
 		_ = meta.UpdateFileMetaDB(fileMeta)
