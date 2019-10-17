@@ -124,7 +124,8 @@ func FileQueryHandler(w http.ResponseWriter, r *http.Request) {
 func DownloadHandler(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	fsha1 := r.Form.Get("filehash")
-	fMeta := meta.GetFileMeta(fsha1)
+	//fMeta := meta.GetFileMeta(fsha1)
+	fMeta, _ := meta.GetFileMetaDB(fsha1)
 
 	file, err := os.Open(fMeta.Location)
 	if err != nil {
@@ -141,7 +142,8 @@ func DownloadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/octect-stream")
-	w.Header().Set("content-disposition", "attachment;filename=\""+fMeta.FileName+"\"")
+	// attachment表示文件将会提示下载到本地，而不是直接在浏览器中打开
+	w.Header().Set("content-disposition", "attachment; filename=\""+fMeta.FileName+"\"")
 	w.Write(data)
 
 }
