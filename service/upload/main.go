@@ -4,6 +4,8 @@ import (
 	"filestore-server/handler"
 	"fmt"
 	"net/http"
+
+	cfg "filestore-server/config"
 )
 
 func main() {
@@ -33,7 +35,7 @@ func main() {
 	http.HandleFunc("/user/signin", handler.SignInHandler)
 	http.HandleFunc("/user/info", handler.HTTPInterceptor(handler.UserInfoHandler))
 
-	err := http.ListenAndServe(":8080", nil)
+	err := http.ListenAndServe(cfg.UploadServiceHost, nil)
 	if err != nil {
 		fmt.Printf("Failed start server,err:%s\n", err)
 	}

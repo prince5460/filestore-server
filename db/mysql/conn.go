@@ -6,13 +6,14 @@ import (
 	"log"
 	"os"
 
+	cfg "filestore-server/config"
 	_ "github.com/go-sql-driver/mysql"
 )
 
 var db *sql.DB
 
 func init() {
-	db, _ = sql.Open("mysql", "root:123456@tcp(127.0.0.1:3307)/fileserver?charset=utf8")
+	db, _ = sql.Open("mysql", cfg.MySQLSource)
 	db.SetMaxOpenConns(1000)
 	err := db.Ping()
 	if err != nil {

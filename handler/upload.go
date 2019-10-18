@@ -2,8 +2,12 @@ package handler
 
 import (
 	"encoding/json"
+	cmn "filestore-server/common"
+	cfg "filestore-server/config"
 	dblayer "filestore-server/db"
 	"filestore-server/meta"
+	"filestore-server/mq"
+	"filestore-server/store/ceph"
 	"filestore-server/store/oss"
 	"filestore-server/util"
 	"fmt"
@@ -26,6 +30,10 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		io.WriteString(w, string(data))
+		// 另一种返回方式:
+		// 动态文件使用http.HandleFunc设置，静态文件使用到http.FileServer设置(见main.go)
+		// 所以直接redirect到http.FileServer所配置的url
+		// http.Redirect(w, r, "/static/view/index.html",  http.StatusFound)
 	} else if r.Method == "POST" {
 		//接收文件流及存储到本地目录
 		file, head, err := r.FormFile("file")
@@ -58,22 +66,43 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 		fileMeta.FileSha1 = util.FileSha1(newFile)
 
 		newFile.Seek(0, 0)
-		//将文件写入ceph存储
-		//data, _ := ioutil.ReadAll(newFile)
-		//bucket := ceph.GetCephBucket("userfile")
-		//cephPath := "/ceph/" + fileMeta.FileSha1
-		//_ = bucket.Put(cephPath, data, "octet-stream", s3.PublicRead)
-		//fileMeta.Location = cephPath
-
-		//将文件写入oss存储
-		ossPath := "oss/" + fileMeta.FileSha1
-		err = oss.Bucket().PutObject(ossPath, newFile)
-		if err != nil {
-			fmt.Println(err.Error())
-			w.Write([]byte("Upload failed"))
-			return
+		if cfg.CurrentStoreType == cmn.StoreCeph {
+			// 文件写入Ceph存储
+			data, _ := ioutil.ReadAll(newFile)
+			cephPath := "/ceph/" + fileMeta.FileSha1
+			_ = ceph.PutObject("userfile", cephPath, data)
+			fileMeta.Location = cephPath
+		} else if cfg.CurrentStoreType == cmn.StoreOSS {
+			// 文件写入OSS存储
+			ossPath := "oss/" + fileMeta.FileSha1
+			// 判断写入OSS为同步还是异步
+			if !cfg.AsyncTransferEnable {
+				err = oss.Bucket().PutObject(ossPath, newFile)
+				if err != nil {
+					fmt.Println(err.Error())
+					w.Write([]byte("Upload failed!"))
+					return
+				}
+				fileMeta.Location = ossPath
+			} else {
+				// 写入异步转移任务队列
+				data := mq.TransferData{
+					FileHash:      fileMeta.FileSha1,
+					CurLocation:   fileMeta.Location,
+					DestLocation:  ossPath,
+					DestStoreType: cmn.StoreOSS,
+				}
+				pubData, _ := json.Marshal(data)
+				pubSuc := mq.Publish(
+					cfg.TransExchangeName,
+					cfg.TransOSSRoutingKey,
+					pubData,
+				)
+				if !pubSuc {
+					// TODO: 当前发送转移信息失败，稍后重试
+				}
+			}
 		}
-		fileMeta.Location = ossPath
 
 		//meta.UpdateFileMeta(fileMeta)
 		//更新文件表记录到数据库
@@ -110,12 +139,16 @@ func GetFileMetaHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := json.Marshal(fMeta)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		return
+	if fMeta != nil {
+		data, err := json.Marshal(fMeta)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Write(data)
+	} else {
+		w.Write([]byte(`{"code":-1,"msg":"no such file"}`))
 	}
-	w.Write(data)
 }
 
 //FileQueryHandler:查询批量的文件元信息
@@ -189,6 +222,8 @@ func FileMetaUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	curFileMeta.FileName = newFileName
 	meta.UpdateFileMeta(curFileMeta)
 
+	// TODO: 更新文件表中的元信息记录
+
 	data, err := json.Marshal(curFileMeta)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -204,13 +239,16 @@ func FileDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	fileSha1 := r.Form.Get("filehash")
 
 	fMeta := meta.GetFileMeta(fileSha1)
+	// 删除文件
 	os.Remove(fMeta.Location)
-
+	// 删除文件元信息
 	meta.RemoveFileMeta(fileSha1)
+	// TODO: 删除表文件信息
 
 	w.WriteHeader(http.StatusOK)
 }
 
+// TryFastUploadHandler : 尝试秒传接口
 func TryFastUploadHandler(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 
@@ -263,7 +301,6 @@ func DownloadURLHandler(w http.ResponseWriter, r *http.Request) {
 	filehash := r.Form.Get("filehash")
 	row, _ := dblayer.GetFileMeta(filehash)
 
-	//TODO:判断文件存在OSS还是Ceph
 	// TODO: 判断文件存在OSS，还是Ceph，还是在本地
 	if strings.HasPrefix(row.FileAddr.String, "./tmp") {
 		username := r.Form.Get("username")
