@@ -4,15 +4,15 @@ import (
 	"encoding/json"
 	dblayer "filestore-server/db"
 	"filestore-server/meta"
-	"filestore-server/store/ceph"
+	"filestore-server/store/oss"
 	"filestore-server/util"
 	"fmt"
-	"gopkg.in/amz.v1/s3"
 	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -57,13 +57,23 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 		newFile.Seek(0, 0)
 		fileMeta.FileSha1 = util.FileSha1(newFile)
 
-		//同时将文件写入ceph存储
 		newFile.Seek(0, 0)
-		data, _ := ioutil.ReadAll(newFile)
-		bucket := ceph.GetCephBucket("userfile")
-		cephPath := "/ceph/" + fileMeta.FileSha1
-		_ = bucket.Put(cephPath, data, "octet-stream", s3.PublicRead)
-		fileMeta.Location = cephPath
+		//将文件写入ceph存储
+		//data, _ := ioutil.ReadAll(newFile)
+		//bucket := ceph.GetCephBucket("userfile")
+		//cephPath := "/ceph/" + fileMeta.FileSha1
+		//_ = bucket.Put(cephPath, data, "octet-stream", s3.PublicRead)
+		//fileMeta.Location = cephPath
+
+		//将文件写入oss存储
+		ossPath := "oss/" + fileMeta.FileSha1
+		err = oss.Bucket().PutObject(ossPath, newFile)
+		if err != nil {
+			fmt.Println(err.Error())
+			w.Write([]byte("Upload failed"))
+			return
+		}
+		fileMeta.Location = ossPath
 
 		//meta.UpdateFileMeta(fileMeta)
 		//更新文件表记录到数据库
@@ -245,4 +255,28 @@ func TryFastUploadHandler(w http.ResponseWriter, r *http.Request) {
 		w.Write(resp.JSONBytes())
 		return
 	}
+}
+
+//DownloadURLHandler:生成文件的下载地址
+func DownloadURLHandler(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	filehash := r.Form.Get("filehash")
+	row, _ := dblayer.GetFileMeta(filehash)
+
+	//TODO:判断文件存在OSS还是Ceph
+	// TODO: 判断文件存在OSS，还是Ceph，还是在本地
+	if strings.HasPrefix(row.FileAddr.String, "./tmp") {
+		username := r.Form.Get("username")
+		token := r.Form.Get("token")
+		tmpUrl := fmt.Sprintf("http://%s/file/download?filehash=%s&username=%s&token=%s",
+			r.Host, filehash, username, token)
+		w.Write([]byte(tmpUrl))
+	} else if strings.HasPrefix(row.FileAddr.String, "/ceph") {
+		// TODO: ceph下载url
+	} else if strings.HasPrefix(row.FileAddr.String, "oss/") {
+		// oss下载url
+		signedURL := oss.DownloadURL(row.FileAddr.String)
+		w.Write([]byte(signedURL))
+	}
+
 }
